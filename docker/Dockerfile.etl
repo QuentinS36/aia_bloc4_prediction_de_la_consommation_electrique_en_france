@@ -1,0 +1,9 @@
+FROM python:3.11-slim
+ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+WORKDIR /app
+COPY requirements/base.txt requirements/etl.txt requirements/
+RUN pip install -r requirements/etl.txt
+COPY dday dday
+RUN useradd -m app && chown -R app /app
+USER app
+CMD ["python", "-m", "dday.etl.main", "--days", "3"]

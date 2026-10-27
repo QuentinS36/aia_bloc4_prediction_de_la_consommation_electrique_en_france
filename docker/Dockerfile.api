@@ -1,0 +1,11 @@
+FROM python:3.11-slim
+ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+WORKDIR /app
+COPY requirements/base.txt requirements/api.txt requirements/
+RUN pip install -r requirements/api.txt
+COPY dday dday
+RUN useradd -m app && chown -R app /app
+USER app
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s CMD python -c "import urllib.request as u; u.urlopen('http://localhost:8000/health')" || exit 1
+CMD ["uvicorn", "dday.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

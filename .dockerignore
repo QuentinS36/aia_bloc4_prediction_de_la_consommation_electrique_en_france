@@ -1,0 +1,8 @@
+.git
+eda-data
+ML
+spaces
+tests
+*.ipynb
+.env
+monitoring_reports

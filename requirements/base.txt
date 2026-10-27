@@ -1,0 +1,6 @@
+pandas>=2.2,<3
+numpy>=1.26,<3
+SQLAlchemy>=2.0,<2.2
+psycopg2-binary>=2.9
+python-dotenv>=1.0
+requests>=2.31
