@@ -1,6 +1,6 @@
 # Prédiction de la consommation électrique en France – Pipeline MLOps
 
-Projet de certification Jedha (Bloc 4 RNCP38777 – *Construire, déployer et piloter des solutions d'IA*).
+Projet de certification Jedha (Bloc 4 RNCP38777 – *Construire, déployer et piloter des solutions d'IA*)
 Équipe : Nicolas Billard, Clément Redondo, Quentin Seng.
 
 ## 1. Objectif
