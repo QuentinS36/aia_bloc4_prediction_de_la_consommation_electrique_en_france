@@ -6,7 +6,7 @@ from sqlalchemy import (Column, DateTime, Float, MetaData, String, Table, create
                         func, select)
 from sqlalchemy.engine import Engine
 
-from dday.config import database_url
+from dday.config import database_url, to_sqlalchemy_url
 
 metadata = MetaData()
 
@@ -30,7 +30,7 @@ predictions = Table(
 
 
 def get_engine(url: str | None = None) -> Engine:
-    return create_engine(url or database_url(), pool_pre_ping=True)
+    return create_engine(to_sqlalchemy_url(url) if url else database_url(), pool_pre_ping=True)
 
 
 def init_schema(engine: Engine) -> None:

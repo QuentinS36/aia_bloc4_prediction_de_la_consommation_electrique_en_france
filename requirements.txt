@@ -1,6 +1,6 @@
 # Dépendances de développement (en plus de environment.yml). Les images Docker utilisent requirements/*.txt
 psycopg2-binary==2.9.11
-SQLAlchemy>=2.0
+SQLAlchemy>=2.0,<2.1
 fastapi>=0.115
 uvicorn[standard]>=0.30
 evidently>=0.7.14,<0.8

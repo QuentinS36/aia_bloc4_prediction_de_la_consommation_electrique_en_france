@@ -30,22 +30,57 @@ mlflow server \
   --workers 1 \
   --allowed-hosts ${PUBLIC_HOST} \
   --cors-allowed-origins "https://${PUBLIC_HOST}" \
-  --backend-store-uri "postgresql://${NEON_USERNAME}:${NEON_PASSWORD}@${NEON_HOST}/neondb?sslmode=require" \
+  --backend-store-uri "postgresql+psycopg2://${NEON_USERNAME}:${NEON_PASSWORD}@${NEON_HOST}/neondb?sslmode=require" \
   --default-artifact-root "${ARTIFACT_STORE_URI}" &
 
 MLFLOW_PID=$!
 
 echo ">>> Waiting for MLflow to start ..."
+ATTEMPTS=0
 until curl -s -f \
   -H "Host: ${PUBLIC_HOST}" \
   -H "Content-Type: application/json" \
   -u "${ADMIN_USERNAME}:${ADMIN_PASSWORD}" \
   http://localhost:${PORT}/api/2.0/mlflow/experiments/search \
   -d '{"max_results": 1}' > /dev/null 2>&1; do
+  if ! kill -0 "$MLFLOW_PID" 2>/dev/null; then
+    echo "ERREUR : le serveur MLflow s'est arrete pendant le demarrage (voir les messages au-dessus)." >&2
+    exit 1
+  fi
+  ATTEMPTS=$((ATTEMPTS + 1))
+  if [ "$ATTEMPTS" -ge 100 ]; then
+    echo "ERREUR : MLflow ne repond pas apres 5 minutes." >&2
+    exit 1
+  fi
   echo "  Waiting..."
   sleep 3
-done || true
+done
 echo ">>> MLflow is ready."
+
+echo ">>> Creating user accounts ..."
+
+create_user() {
+  local USERNAME=$1
+  local PASSWORD=$2
+  RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+    -X POST http://localhost:${PORT}/api/2.0/mlflow/users/create \
+    -H "Host: ${PUBLIC_HOST}" \
+    -u "${ADMIN_USERNAME}:${ADMIN_PASSWORD}" \
+    -H "Content-Type: application/json" \
+    -d "{\"username\": \"${USERNAME}\", \"password\": \"${PASSWORD}\"}")
+
+  if [ "$RESPONSE" = "200" ]; then
+    echo "  Account '${USERNAME}' created."
+  elif [ "$RESPONSE" = "400" ]; then
+    echo "  Account '${USERNAME}' already exists, ignored."
+  else
+    echo "  Error for account '${USERNAME}' (HTTP ${RESPONSE})."
+  fi
+}
+
+create_user "${USERNAME_CR}" "${PASSWORD_CR}"
+create_user "${USERNAME_NB}" "${PASSWORD_NB}"
+create_user "${USERNAME_YR}" "${PASSWORD_YR}"
 
 echo ">>> Initialisation completed."
 wait $MLFLOW_PID

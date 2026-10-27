@@ -5,6 +5,7 @@ Accessibilité : palette Okabe-Ito (daltonisme), styles de ligne distincts, titr
 résumés textuels sous chaque graphique, aucune information portée par la couleur seule.
 """
 import os
+import re
 import time
 
 try:  # en local, lit le .env de la racine ; sur Render, les variables d'environnement du service suffisent
@@ -38,7 +39,7 @@ def secret(name: str) -> str | None:
 @st.cache_resource
 def engine():
     url = secret("DATABASE_URL")
-    return create_engine(url.replace("postgres://", "postgresql://", 1), pool_pre_ping=True) if url else None
+    return create_engine(re.sub(r"^postgres(ql)?://", "postgresql+psycopg2://", url), pool_pre_ping=True) if url else None
 
 
 @st.cache_data(ttl=600)
