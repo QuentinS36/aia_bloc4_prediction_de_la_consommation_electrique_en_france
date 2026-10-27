@@ -1,11 +1,25 @@
 #!/bin/bash
 set -e
 
+# Nom d'hote public du service (sans https://), ex. dday-mlflow.onrender.com.
+# Render fournit RENDER_EXTERNAL_HOSTNAME ; MLFLOW_PUBLIC_HOST permet de le fixer explicitement.
+PUBLIC_HOST="${MLFLOW_PUBLIC_HOST:-$RENDER_EXTERNAL_HOSTNAME}"
+if [ -z "$PUBLIC_HOST" ]; then
+  echo "ERREUR : definissez MLFLOW_PUBLIC_HOST (ex. dday-mlflow.onrender.com)" >&2
+  exit 1
+fi
+
 echo ">>> Creating basic_auth.ini ..."
-sed \
-  -e "s/PLACEHOLDER_ADMIN_USERNAME/${ADMIN_USERNAME}/g" \
-  -e "s/PLACEHOLDER_ADMIN_PASSWORD/${ADMIN_PASSWORD}/g" \
-  /app/basic_auth.ini.template > /app/basic_auth.ini
+# Genere sans sed : les mots de passe contenant / ou & ne cassent plus la configuration.
+# AUTH_DB_URI (optionnel) : base persistante pour les comptes et permissions. Par defaut, SQLite local,
+# efface a chaque redeploiement sur Render (les comptes sont recrees plus bas, mais pas les permissions).
+cat > /app/basic_auth.ini <<CONF
+[mlflow]
+default_permission = ${DEFAULT_PERMISSION:-READ}
+database_uri = ${AUTH_DB_URI:-sqlite:////app/auth.db}
+admin_username = ${ADMIN_USERNAME}
+admin_password = ${ADMIN_PASSWORD}
+CONF
 
 echo ">>> Launching MLflow..."
 export MLFLOW_AUTH_CONFIG_PATH=/app/basic_auth.ini
@@ -14,8 +28,8 @@ mlflow server \
   --host 0.0.0.0 \
   --port ${PORT} \
   --workers 1 \
-  --allowed-hosts ${HF_DEMODAY_SPACE_URL} \
-  --cors-allowed-origins "https://${HF_DEMODAY_SPACE_URL}" \
+  --allowed-hosts ${PUBLIC_HOST} \
+  --cors-allowed-origins "https://${PUBLIC_HOST}" \
   --backend-store-uri "postgresql://${NEON_USERNAME}:${NEON_PASSWORD}@${NEON_HOST}/neondb?sslmode=require" \
   --default-artifact-root "${ARTIFACT_STORE_URI}" &
 
@@ -23,7 +37,7 @@ MLFLOW_PID=$!
 
 echo ">>> Waiting for MLflow to start ..."
 until curl -s -f \
-  -H "Host: ${HF_DEMODAY_SPACE_URL}" \
+  -H "Host: ${PUBLIC_HOST}" \
   -H "Content-Type: application/json" \
   -u "${ADMIN_USERNAME}:${ADMIN_PASSWORD}" \
   http://localhost:${PORT}/api/2.0/mlflow/experiments/search \
@@ -40,7 +54,7 @@ create_user() {
   local PASSWORD=$2
   RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
     -X POST http://localhost:${PORT}/api/2.0/mlflow/users/create \
-    -H "Host: ${HF_DEMODAY_SPACE_URL}" \
+    -H "Host: ${PUBLIC_HOST}" \
     -u "${ADMIN_USERNAME}:${ADMIN_PASSWORD}" \
     -H "Content-Type: application/json" \
     -d "{\"username\": \"${USERNAME}\", \"password\": \"${PASSWORD}\"}")
