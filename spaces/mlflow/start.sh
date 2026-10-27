@@ -47,30 +47,5 @@ until curl -s -f \
 done || true
 echo ">>> MLflow is ready."
 
-echo ">>> Creating user accounts ..."
-
-create_user() {
-  local USERNAME=$1
-  local PASSWORD=$2
-  RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
-    -X POST http://localhost:${PORT}/api/2.0/mlflow/users/create \
-    -H "Host: ${PUBLIC_HOST}" \
-    -u "${ADMIN_USERNAME}:${ADMIN_PASSWORD}" \
-    -H "Content-Type: application/json" \
-    -d "{\"username\": \"${USERNAME}\", \"password\": \"${PASSWORD}\"}")
-
-  if [ "$RESPONSE" = "200" ]; then
-    echo "  Account '${USERNAME}' created."
-  elif [ "$RESPONSE" = "400" ]; then
-    echo "  Account '${USERNAME}' already exists, ignored."
-  else
-    echo "  Error for account '${USERNAME}' (HTTP ${RESPONSE})."
-  fi
-}
-
-create_user "${USERNAME_CR}" "${PASSWORD_CR}"
-create_user "${USERNAME_NB}" "${PASSWORD_NB}"
-create_user "${USERNAME_YR}" "${PASSWORD_YR}"
-
 echo ">>> Initialisation completed."
 wait $MLFLOW_PID
