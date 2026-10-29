@@ -36,7 +36,41 @@ def check_db() -> str:
 
 def check_mlflow() -> str:
     import mlflow
-    return f"{len(mlflow.search_experiments())} expérience(s) visible(s)"
+    from mlflow import MlflowClient
+    n_exp = len(mlflow.search_experiments())
+    n_models = len(MlflowClient().search_registered_models(max_results=5))
+    return f"{n_exp} expérience(s), {n_models} modèle(s) enregistré(s) visibles ({mlflow.get_tracking_uri()})"
+
+
+def check_mlflow_write() -> str:
+    """Test d'écriture complet (suivi, artifact, registry, alias) avec nettoyage, avant le premier entraînement."""
+    import time
+
+    from mlflow import MlflowClient
+
+    c = MlflowClient()
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    model_name = f"dday-check-model-{stamp}"
+    exp_id = c.create_experiment(f"dday-check-{stamp}")
+    try:
+        run = c.create_run(exp_id)
+        rid = run.info.run_id
+        c.log_param(rid, "check", "ok")
+        c.log_metric(rid, "test_mape", 0.0)
+        c.log_text(rid, "ok", "check.txt")
+        c.create_registered_model(model_name)
+        mv = c.create_model_version(model_name, source=f"{run.info.artifact_uri}/check.txt", run_id=rid)
+        c.set_registered_model_alias(model_name, "champion", mv.version)
+        if str(c.get_model_version_by_alias(model_name, "champion").version) != str(mv.version):
+            raise RuntimeError("l'alias champion ne renvoie pas la bonne version")
+        c.set_terminated(rid)
+        return "écriture, artifact, registry et alias OK (éléments de test supprimés)"
+    finally:
+        for cleanup in (lambda: c.delete_registered_model(model_name), lambda: c.delete_experiment(exp_id)):
+            try:
+                cleanup()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def check_s3(bucket: str) -> str:
@@ -47,7 +81,8 @@ def check_s3(bucket: str) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--bucket", help="Nom du bucket S3 à tester (sinon déduit de REPORT_S3_URI)")
+    ap.add_argument("--bucket", help="Nom du bucket S3 à tester (optionnel ; sinon déduit de REPORT_S3_URI)")
+    ap.add_argument("--mlflow-write", action="store_true", help="Test d'écriture MLflow (crée puis supprime des éléments de test)")
     a = ap.parse_args()
     bucket = a.bucket
     uri = os.getenv("REPORT_S3_URI", "")
@@ -55,10 +90,10 @@ def main() -> int:
         bucket = uri.removeprefix("s3://").split("/", 1)[0]
 
     results = [_run("RTE", check_rte), _run("Base", check_db), _run("MLflow", check_mlflow)]
+    if a.mlflow_write:
+        results.append(_run("MLflow+", check_mlflow_write))
     if bucket:
         results.append(_run("S3", lambda: check_s3(bucket)))
-    else:
-        print("S3       ignoré  (précisez --bucket NOM_DU_BUCKET)")
     return 0 if all(results) else 1
 
 

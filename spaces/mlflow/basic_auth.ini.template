@@ -1,5 +1,0 @@
-[mlflow]
-default_permission = READ
-database_uri = sqlite:////app/auth.db
-admin_username = PLACEHOLDER_ADMIN_USERNAME
-admin_password = PLACEHOLDER_ADMIN_PASSWORD

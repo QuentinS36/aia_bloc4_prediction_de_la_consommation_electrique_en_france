@@ -1,6 +1,6 @@
 # Prédiction de la consommation électrique en France – Pipeline MLOps
 
-Projet de certification Jedha (Bloc 4 RNCP38777 – *Construire, déployer et piloter des solutions d'IA*)
+Projet de certification Jedha (Bloc 4 RNCP38777 – *Construire, déployer et piloter des solutions d'IA*).
 Équipe : Nicolas Billard, Clément Redondo, Quentin Seng.
 
 ## 1. Objectif
@@ -27,12 +27,12 @@ RTE Eco2mix + Open-Meteo
                               │
           ┌───────────────────┤
           ▼                   ▼
- ML : Prophet + MLflow     Dashboard Streamlit (Hugging Face)
+ ML : Prophet + MLflow     Dashboard Streamlit (Render)
  (Docker, EC2)                ▲
           │                   │
           ▼                   │
  Registry MLflow ──► API FastAPI /predict ─┘
- (Neon + S3)                  │
+ (DagsHub)                    │
                               ▼
                    Monitoring Evidently ──► alerte ──► réentraînement
  Orchestration : Apache Airflow     CI/CD : GitHub Actions
@@ -43,13 +43,13 @@ RTE Eco2mix + Open-Meteo
 | Sources | RTE Eco2mix API, Open-Meteo API |
 | Stockage données | Neon DB (Postgres) |
 | Modèle | Prophet (Meta) avec régresseurs météo |
-| Suivi d'expériences et registry | MLflow (Hugging Face Space, backend Neon, artifacts S3) |
+| Suivi d'expériences et registry | MLflow hébergé sur DagsHub (suivi, registry, stockage des artifacts) |
 | API | FastAPI |
 | Conteneurisation | Docker (un conteneur par service) |
 | Orchestration | Apache Airflow |
-| CI/CD | GitHub Actions, DockerHub, Hugging Face |
+| CI/CD | GitHub Actions, DockerHub, Render (déploiement automatique) |
 | Monitoring | Evidently |
-| Dashboard | Streamlit |
+| Dashboard | Streamlit (service Render) |
 
 ## 3. Structure du dépôt
 
@@ -66,9 +66,8 @@ RTE Eco2mix + Open-Meteo
 ├── docker/                  # Dockerfile.etl, Dockerfile.ml, Dockerfile.api
 ├── requirements/            # Dépendances par service (+ test.txt)
 ├── tests/                   # Tests pytest (ETL, ML, API, monitoring)
-├── .github/workflows/       # etl.yml, ml.yml, api.yml + synchronisation Hugging Face
-├── spaces/mlflow/           # Serveur MLflow (Hugging Face)
-├── spaces/streamlit/        # Dashboard (Hugging Face)
+├── .github/workflows/       # etl.yml, ml.yml, api.yml
+├── spaces/streamlit/        # Dashboard (déployé sur Render)
 ├── eda-data/, ML/prophet/   # Exploration et notebooks de modélisation (historique du projet)
 ├── .env.example
 ├── environment.yml
@@ -84,6 +83,15 @@ conda env update -f environment.yml --prune   # après modification des dépenda
 ```
 
 Copier `.env.example` en `.env` et renseigner les valeurs (ne jamais versionner `.env`).
+
+**MLflow sur DagsHub** : créer (ou connecter) un dépôt sur DagsHub ; le serveur MLflow est alors disponible à
+`https://dagshub.com/<utilisateur>/<depot>.mlflow`. `MLFLOW_TRACKING_USERNAME` est le nom d'utilisateur DagsHub et
+`MLFLOW_TRACKING_PASSWORD` un jeton créé dans *Settings > Tokens*.
+
+Vérifier la configuration (RTE, base, MLflow) : `python -m dday.check`.
+Test d'écriture MLflow (expérience, run, artifact, registry, alias, avec nettoyage) : `python -m dday.check --mlflow-write`.
+S3 (optionnel, rapports de monitoring) : `python -m dday.check --bucket NOM_DU_BUCKET`.
+Diagnostic RTE détaillé : `python -m dday.etl.extract`. Variables lues : `python -m dday.config`.
 
 ## 5. Pipeline de données (ETL)
 
@@ -143,7 +151,7 @@ curl http://localhost:8000/predict
 
 **GitHub Actions** (à chaque push) :
 - ETL, ML, API : tests `pytest` → build Docker → push DockerHub.
-- Dashboard et MLflow : tests → synchronisation du Space Hugging Face.
+- Dashboard : déploiement automatique par Render à chaque push sur `main`.
 - Secrets stockés dans GitHub Secrets.
 
 **Airflow** – DAG `dday_daily` (5 h chaque jour) : création de l'instance EC2 → ETL → monitoring Evidently → entraînement (normal ou forcé selon le monitoring) → rechargement de l'API → arrêt de l'instance (toujours exécuté, même en cas d'échec). Variables Airflow : `AMI_ID`, `SECURITY_GROUP_ID`, `KEY_NAME`, `DOCKERHUB_USER`, `API_URL`, `API_KEY` ; connexion `ec2_ssh`.
@@ -151,7 +159,7 @@ curl http://localhost:8000/predict
 **Evidently** – chaque jour :
 - dérive des données (température, consommation) par rapport à la référence ;
 - performance réelle (MAPE sur la veille) ;
-- rapport HTML stocké sur S3 ;
+- rapport HTML enregistré dans `monitoring_reports/` (et sur S3 si `REPORT_S3_URI` est défini) ;
 - seuil d'alerte : MAPE > 4 % ou dérive détectée → notification et réentraînement forcé.
 
 ## 9. Accessibilité
@@ -175,7 +183,8 @@ Les tests utilisent des données synthétiques, SQLite et un MLflow local : ils 
 | Composant | Démo | Production cible |
 |---|---|---|
 | Base de données | Neon DB | AWS Redshift |
-| Application web | Hugging Face Space | Serveur dédié ou VPS |
+| Application web | Render | Serveur dédié ou VPS |
+| Serveur MLflow | DagsHub | Serveur MLflow dédié |
 | Airflow | Local | Serveur dédié |
 | ETL / ML | EC2 à la demande | EC2 / ECS |
 
