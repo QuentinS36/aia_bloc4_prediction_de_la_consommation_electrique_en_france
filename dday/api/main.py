@@ -41,6 +41,7 @@ class PredictionResponse(BaseModel):
     date: dt.date
     model_version: str
     unit: str = "MW"
+    weather_source: str | None = Field(None, description="Origine de la prévision météo : base de données (ETL) ou Open-Meteo (appel direct)")
     predictions: list[PredictionPoint]
 
 
@@ -67,16 +68,76 @@ def _get_model():
     return _state["model"], _state["version"]
 
 
+# Prévision météo gardée en mémoire : évite de solliciter Open-Meteo à chaque appel (limites de débit)
+# et permet de répondre avec la dernière prévision connue si le service est momentanément indisponible.
+_weather_cache: dict[dt.date, tuple[float, pd.DataFrame]] = {}
+WEATHER_FRESH_SECONDS = 2 * 3600
+WEATHER_STALE_MAX_SECONDS = 24 * 3600
+
+
+_engines: dict = {}
+
+
+def _db_engine():
+    """Moteur SQLAlchemy réutilisé entre les requêtes (un par URL)."""
+    from dday.db import get_engine, init_schema
+    url = os.getenv("DATABASE_URL", "")
+    if url not in _engines:
+        engine = get_engine()
+        init_schema(engine)
+        _engines[url] = engine
+    return _engines[url]
+
+
+def _forecast_from_db(day: dt.date) -> pd.DataFrame | None:
+    """Prévision météo du jour, stockée par l'ETL. None si absente ou incomplète (moins de 24 heures)."""
+    if not os.getenv("DATABASE_URL"):
+        return None
+    try:
+        from dday.db import read_weather_forecast
+        start = pd.Timestamp(day)
+        df = read_weather_forecast(_db_engine(), start, start + pd.Timedelta(days=1))
+    except Exception:
+        log.exception("Lecture de la prévision météo en base impossible")
+        return None
+    return df if len(df) >= 24 else None
+
+
 def _forecast_features(day: dt.date) -> pd.DataFrame:
-    """Statistiques de température prévues pour `day` (24 heures UTC)."""
+    """Statistiques de température prévues pour `day` (24 heures UTC).
+
+    Ordre des sources : 1) table weather_forecast, remplie chaque jour par l'ETL ; 2) mémoire (moins de 2 h) ;
+    3) appel direct à Open-Meteo, limité au jour demandé ; 4) en cas de panne de l'appel direct, dernière prévision
+    en mémoire de moins de 24 h. L'API gratuite limite le débit (HTTP 429), surtout depuis des adresses partagées.
+    """
     horizon = (day - dt.datetime.now(dt.timezone.utc).date()).days + 1
     if horizon < 1 or horizon > 14:
         raise HTTPException(422, "La date doit être comprise entre aujourd'hui et J+13")
-    stats = transform.aggregate_weather(extract.fetch_weather(past_days=0, forecast_days=horizon + 1))
-    start = pd.Timestamp(day)
-    out = stats[(stats["ds"] >= start) & (stats["ds"] < start + pd.Timedelta(days=1))]
-    if len(out) < 24:
-        raise HTTPException(502, "Prévision météo incomplète pour cette date")
+
+    df = _forecast_from_db(day)
+    if df is not None:
+        df.attrs["source"] = "base de données"
+        return df
+
+    now = time.time()
+    cached = _weather_cache.get(day)
+    if cached and now - cached[0] < WEATHER_FRESH_SECONDS:
+        return cached[1]
+
+    try:
+        stats = transform.aggregate_weather(extract.fetch_weather(start_date=day.isoformat()))
+        start = pd.Timestamp(day)
+        out = stats[(stats["ds"] >= start) & (stats["ds"] < start + pd.Timedelta(days=1))]
+        if len(out) < 24:
+            raise HTTPException(502, "Prévision météo incomplète pour cette date")
+    except requests.RequestException:
+        if cached and now - cached[0] < WEATHER_STALE_MAX_SECONDS:
+            log.warning("Open-Meteo indisponible : dernière prévision connue utilisée pour %s", day)
+            cached[1].attrs["source"] = "open-meteo (dernière prévision connue)"
+            return cached[1]
+        raise
+    out.attrs["source"] = "open-meteo"
+    _weather_cache[day] = (now, out)
     return out
 
 
@@ -84,10 +145,8 @@ def _persist(df: pd.DataFrame, version: str) -> None:
     if not os.getenv("DATABASE_URL"):
         return
     try:
-        from dday.db import get_engine, init_schema, upsert_predictions
-        engine = get_engine()
-        init_schema(engine)
-        upsert_predictions(engine, df, version)
+        from dday.db import upsert_predictions
+        upsert_predictions(_db_engine(), df, version)
     except Exception:  # la prévision reste servie même si l'historisation échoue
         log.exception("Historisation des prévisions impossible")
 
@@ -121,7 +180,7 @@ def predict(date: dt.date | None = Query(
         pred = model.predict(feats[["ds"] + config.REGRESSORS])[["ds", "yhat"]]
         _persist(pred, version)
         return PredictionResponse(
-            date=day, model_version=version,
+            date=day, model_version=version, weather_source=feats.attrs.get("source"),
             predictions=[PredictionPoint(ds=r.ds, yhat=round(float(r.yhat), 1)) for r in pred.itertuples()],
         )
     except HTTPException:

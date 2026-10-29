@@ -77,3 +77,37 @@ def test_unknown_failure_names_the_exception_type(client, monkeypatch):
     monkeypatch.setitem(main._state, "model", BadModel())
     r = client.get("/predict")
     assert r.status_code == 500 and "ValueError" in r.json()["detail"] and "NaN" not in r.json()["detail"]
+
+
+def _fake_weather(day):
+    ds = pd.date_range(pd.Timestamp(day), periods=24, freq="h")
+    return pd.concat([pd.DataFrame({"dept": d, "ds": ds, "temperature": t}) for d, t in [("01", 5.0), ("02", 9.0), ("03", 7.0)]])
+
+
+def test_weather_is_cached_between_calls(monkeypatch):
+    calls = []
+    monkeypatch.setattr(main.extract, "fetch_weather", lambda **k: calls.append(k) or _fake_weather(k["start_date"]))
+    main._weather_cache.clear()
+    day = dt.datetime.now(dt.timezone.utc).date() + dt.timedelta(days=1)
+    a = main._forecast_features(day)
+    b = main._forecast_features(day)
+    assert len(calls) == 1 and len(a) == 24 and a is b
+    assert calls[0]["start_date"] == day.isoformat()  # requête limitée au jour demandé
+
+
+def test_stale_weather_is_used_when_open_meteo_fails(monkeypatch):
+    import requests
+    day = dt.datetime.now(dt.timezone.utc).date() + dt.timedelta(days=1)
+    main._weather_cache.clear()
+    monkeypatch.setattr(main.extract, "fetch_weather", lambda **k: _fake_weather(k["start_date"]))
+    first = main._forecast_features(day)
+    ts, df = main._weather_cache[day]
+    main._weather_cache[day] = (ts - main.WEATHER_FRESH_SECONDS - 60, df)  # périmé mais utilisable
+
+    def down(**k):
+        raise requests.ConnectionError("hors service")
+    monkeypatch.setattr(main.extract, "fetch_weather", down)
+    assert main._forecast_features(day) is first          # dernière prévision connue
+    main._weather_cache.clear()
+    with __import__("pytest").raises(requests.ConnectionError):
+        main._forecast_features(day)                      # rien en mémoire : l'erreur remonte (502 côté route)

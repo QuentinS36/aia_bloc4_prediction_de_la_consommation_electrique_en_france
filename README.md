@@ -104,7 +104,7 @@ secrets Codespaces (GitHub > Settings > Codespaces > Secrets) : aucun fichier `.
 
 1. **Extract** : consommation RTE (`short_term`, type REALISED) et température Open-Meteo par département.
 2. **Transform** : agrégation horaire, statistiques de température (moyenne, min, max, médiane, écart-type, quartiles), contrôle qualité (manquants, doublons, outliers).
-3. **Load** : insertion idempotente dans Neon DB (clé unique sur l'horodatage).
+3. **Load** : insertion idempotente dans Neon DB (clé unique sur l'horodatage). Le même appel Open-Meteo fournit aussi les prévisions de température des 7 prochains jours, stockées dans la table `weather_forecast` : l'API les lit en base au lieu d'interroger Open-Meteo à chaque requête (limites de débit, HTTP 429).
 
 ```bash
 python -m dday.etl.main --days 3                 # en local
@@ -134,7 +134,7 @@ Documentation interactive : `http://<hôte>:8000/docs` (OpenAPI).
 
 | Méthode | Route | Description |
 |---|---|---|
-| GET | `/predict?date=AAAA-MM-JJ` | Prévision horaire (24 valeurs, UTC) ; par défaut demain |
+| GET | `/predict?date=AAAA-MM-JJ` | Prévision horaire (24 valeurs, UTC) ; par défaut demain. `weather_source` indique l'origine de la météo : base de données (ETL), Open-Meteo (appel direct, mis en cache 2 h) ou dernière prévision connue (moins de 24 h) |
 | GET | `/health` | État du service |
 | GET | `/model-info` | Version du modèle servi |
 | GET | `/metrics` | Nombre de requêtes, erreurs, latence moyenne |

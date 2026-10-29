@@ -52,3 +52,14 @@ def quality_report(df: pd.DataFrame) -> dict:
     if missing:
         warnings.append(f"{missing} heure(s) manquante(s) dans la plage")
     return {"rows": len(df), "errors": errors, "warnings": warnings}
+
+
+FORECAST_REGRESSORS = ["mean", "min", "max", "std", "q1", "q3"]
+
+
+def forecast_rows(stats: pd.DataFrame, now) -> pd.DataFrame:
+    """Statistiques de température à partir de minuit (UTC) du jour courant, lignes complètes seulement."""
+    ts = pd.Timestamp(now)
+    ts = ts.tz_convert("UTC").tz_localize(None) if ts.tzinfo is not None else ts
+    out = stats[stats["ds"] >= ts.normalize()].dropna(subset=FORECAST_REGRESSORS)
+    return out.reset_index(drop=True)

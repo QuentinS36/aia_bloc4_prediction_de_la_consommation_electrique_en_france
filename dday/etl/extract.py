@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import os
+import time
 import datetime as dt
 
 import pandas as pd
@@ -63,19 +64,50 @@ def fetch_rte_consumption(start: dt.datetime, end: dt.datetime) -> pd.DataFrame:
     return pd.DataFrame(values)[["start_date", "end_date", "value"]]
 
 
-def fetch_weather(past_days: int = 0, forecast_days: int = 1) -> pd.DataFrame:
-    """Température à 2 m, toutes préfectures, horodatage UTC. Colonnes : dept, ds, temperature."""
+RETRY_STATUS = {429, 500, 502, 503, 504}
+RETRY_DELAYS = (2, 5, 10)  # secondes entre deux tentatives
+
+
+def _get_with_retry(url: str, params: dict) -> requests.Response:
+    """GET avec nouvelles tentatives sur limite de débit (429), erreurs serveur (5xx) et coupures réseau."""
+    attempts = len(RETRY_DELAYS) + 1
+    for i in range(attempts):
+        last_try = i == attempts - 1
+        try:
+            r = requests.get(url, params=params, timeout=TIMEOUT)
+        except (requests.ConnectionError, requests.Timeout):
+            if last_try:
+                raise
+            time.sleep(RETRY_DELAYS[i])
+            continue
+        if r.status_code in RETRY_STATUS and not last_try:
+            try:  # respecte Retry-After s'il est fourni (plafonné)
+                delay = min(float(r.headers.get("Retry-After", "")), 20.0)
+            except ValueError:
+                delay = RETRY_DELAYS[i]
+            time.sleep(delay)
+            continue
+        r.raise_for_status()
+        return r
+    raise RuntimeError("inatteignable")
+
+
+def fetch_weather(past_days: int = 0, forecast_days: int = 1, start_date: str | None = None) -> pd.DataFrame:
+    """Température à 2 m, toutes préfectures, horodatage UTC. Colonnes : dept, ds, temperature.
+
+    Avec start_date (AAAA-MM-JJ), la requête est limitée à ce seul jour : plus légère pour les limites de débit.
+    """
     params = {
         "latitude": ",".join(str(d[1]) for d in DEPARTMENTS),
         "longitude": ",".join(str(d[2]) for d in DEPARTMENTS),
         "hourly": "temperature_2m",
-        "past_days": past_days,
-        "forecast_days": forecast_days,
         "timezone": "UTC",
     }
-    r = requests.get(OPEN_METEO_URL, params=params, timeout=TIMEOUT)
-    r.raise_for_status()
-    data = r.json()
+    if start_date:
+        params.update({"start_date": start_date, "end_date": start_date})
+    else:
+        params.update({"past_days": past_days, "forecast_days": forecast_days})
+    data = _get_with_retry(OPEN_METEO_URL, params).json()
     data = data if isinstance(data, list) else [data]
     frames = []
     for dept, loc in zip(DEPARTMENTS, data):

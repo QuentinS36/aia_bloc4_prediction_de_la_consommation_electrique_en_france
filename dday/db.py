@@ -29,6 +29,17 @@ predictions = Table(
 )
 
 
+# Prévisions de température (statistiques nationales) des prochains jours, rafraîchies chaque jour par l'ETL.
+# L'API les lit ici : elle n'appelle plus Open-Meteo à chaque requête (limites de débit, erreurs HTTP 429).
+FORECAST_COLS = ["mean", "min", "max", "median", "std", "q1", "q3"]
+weather_forecast = Table(
+    "weather_forecast", metadata,
+    Column("ds", DateTime, primary_key=True),
+    *[Column(c, Float) for c in FORECAST_COLS],
+    Column("fetched_at", DateTime),
+)
+
+
 def get_engine(url: str | None = None) -> Engine:
     return create_engine(to_sqlalchemy_url(url) if url else database_url(), pool_pre_ping=True)
 
@@ -86,6 +97,27 @@ def read_predictions(engine: Engine, since: pd.Timestamp | None = None) -> pd.Da
     q = select(predictions).order_by(predictions.c.ds)
     if since is not None:
         q = q.where(predictions.c.ds >= since.to_pydatetime())
+    with engine.connect() as conn:
+        df = pd.read_sql(q, conn)
+    df["ds"] = pd.to_datetime(df["ds"])
+    return df
+
+
+def upsert_weather_forecast(engine: Engine, df: pd.DataFrame) -> int:
+    """Insère ou met à jour les prévisions météo (clé : ds) et note l'heure de récupération (UTC)."""
+    import datetime as _dt
+    rows = _clean_rows(df[["ds"] + FORECAST_COLS])
+    now = _dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None)
+    for r in rows:
+        r["fetched_at"] = now
+    return _upsert(engine, weather_forecast, rows, ["ds"])
+
+
+def read_weather_forecast(engine: Engine, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+    """Prévisions météo pour start <= ds < end (UTC, naïf)."""
+    q = (select(weather_forecast).where(weather_forecast.c.ds >= start.to_pydatetime(),
+                                        weather_forecast.c.ds < end.to_pydatetime())
+         .order_by(weather_forecast.c.ds))
     with engine.connect() as conn:
         df = pd.read_sql(q, conn)
     df["ds"] = pd.to_datetime(df["ds"])

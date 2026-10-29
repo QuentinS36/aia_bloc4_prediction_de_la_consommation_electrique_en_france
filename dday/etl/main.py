@@ -8,10 +8,12 @@ import argparse
 import datetime as dt
 import logging
 
-from dday.db import get_engine, init_schema, upsert_dataset
+from dday.db import get_engine, init_schema, upsert_dataset, upsert_weather_forecast
 from dday.etl import extract, transform
 
 log = logging.getLogger("dday.etl")
+
+FORECAST_DAYS = 7  # prévisions météo conservées pour l'API
 
 
 def run(days: int = 3, engine=None) -> dict:
@@ -20,11 +22,11 @@ def run(days: int = 3, engine=None) -> dict:
     start = end - dt.timedelta(days=days)
 
     raw = extract.fetch_rte_consumption(start - dt.timedelta(hours=1), end)
-    weather = extract.fetch_weather(past_days=days + 1, forecast_days=1)
+    # Un seul appel Open-Meteo : historique récent (pour l'entraînement) et prévisions des prochains jours (pour l'API)
+    weather = extract.fetch_weather(past_days=days + 1, forecast_days=FORECAST_DAYS)
+    stats = transform.aggregate_weather(weather)
 
-    df = transform.build_dataset(
-        transform.to_hourly_consumption(raw), transform.aggregate_weather(weather)
-    )
+    df = transform.build_dataset(transform.to_hourly_consumption(raw), stats)
     report = transform.quality_report(df)
     for w in report["warnings"]:
         log.warning(w)
@@ -34,8 +36,10 @@ def run(days: int = 3, engine=None) -> dict:
     engine = engine or get_engine()
     init_schema(engine)
     n = upsert_dataset(engine, df)
-    log.info("ETL terminé : %s lignes chargées (%s -> %s)", n, df["ds"].min(), df["ds"].max())
-    return {**report, "loaded": n}
+    forecast = transform.forecast_rows(stats, end)
+    n_forecast = upsert_weather_forecast(engine, forecast) if len(forecast) else 0
+    log.info("ETL terminé : %s lignes chargées (%s -> %s), %s heures de prévision météo", n, df["ds"].min(), df["ds"].max(), n_forecast)
+    return {**report, "loaded": n, "forecast_loaded": n_forecast}
 
 
 if __name__ == "__main__":
