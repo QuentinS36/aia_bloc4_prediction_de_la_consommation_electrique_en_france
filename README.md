@@ -195,6 +195,19 @@ Les tests utilisent des données synthétiques, SQLite et un MLflow local : ils 
 | Airflow | Local | Serveur dédié |
 | ETL / ML | EC2 à la demande | EC2 / ECS |
 
+### Déploiement sur Render (API et dashboard)
+
+Deux *Web Services* reliés au dépôt GitHub, déployés automatiquement à chaque push sur `main`.
+
+| | API | Dashboard |
+|---|---|---|
+| Langage | Docker | Python |
+| Dossier racine | (vide) | `spaces/streamlit` |
+| Dockerfile / build | `./docker/Dockerfile.api`, contexte `.` | `pip install -r requirements.txt` |
+| Démarrage | défini par le Dockerfile (`PORT` fourni par Render) | `streamlit run app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true` |
+| Health check | `/health` | (aucun) |
+| Variables | `DATABASE_URL`, `MLFLOW_TRACKING_URI`, `MLFLOW_TRACKING_USERNAME`, `MLFLOW_TRACKING_PASSWORD`, `MODEL_NAME`, `API_KEY` | `DATABASE_URL`, `API_URL`, `PYTHON_VERSION` |
+
 ## 12. Perspectives
 
 Sécurité (rôles IAM minimaux, rotation des secrets), monitoring continu avec alerting, dashboard enrichi, mise à l'échelle (ECS/Kubernetes).

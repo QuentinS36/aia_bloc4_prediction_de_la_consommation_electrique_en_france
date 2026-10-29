@@ -6,6 +6,7 @@ RUN pip install -r requirements/api.txt
 COPY dday dday
 RUN useradd -m app && chown -R app /app
 USER app
+# Port : 8000 par défaut, ou la variable PORT fournie par la plateforme (Render)
 EXPOSE 8000
-HEALTHCHECK --interval=30s --timeout=5s CMD python -c "import urllib.request as u; u.urlopen('http://localhost:8000/health')" || exit 1
-CMD ["uvicorn", "dday.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+HEALTHCHECK --interval=30s --timeout=5s CMD python -c "import os, urllib.request as u; u.urlopen('http://localhost:%s/health' % os.environ.get('PORT', '8000'))" || exit 1
+CMD ["sh", "-c", "exec uvicorn dday.api.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
