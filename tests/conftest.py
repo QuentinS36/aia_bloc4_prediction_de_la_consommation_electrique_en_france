@@ -1,3 +1,6 @@
+import os
+import subprocess
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -41,3 +44,29 @@ def mlflow_local(tmp_path, monkeypatch):
     mlflow.set_registry_uri(f"sqlite:///{tmp_path/'mlflow.db'}")
     monkeypatch.setenv("MLFLOW_ARTIFACT_ROOT", str(tmp_path / "artifacts"))
     yield
+
+
+def stan_blocked_by_policy() -> bool:
+    """True si Windows interdit l'exécution de l'exécutable Stan de Prophet (stratégie de contrôle d'application).
+
+    Ne retourne True que pour cette erreur précise (WinError 4551) : partout ailleurs, notamment dans la CI
+    sous Linux, les tests Prophet s'exécutent normalement et leurs échecs restent visibles.
+    """
+    try:
+        import prophet
+    except ImportError:
+        return False
+    exe = os.path.join(os.path.dirname(prophet.__file__), "stan_model", "prophet_model.bin")
+    try:
+        subprocess.run([exe, "help"], capture_output=True, timeout=30)
+    except OSError as e:
+        return getattr(e, "winerror", None) == 4551
+    except Exception:
+        return False
+    return False
+
+
+@pytest.fixture(scope="session")
+def require_stan():
+    if stan_blocked_by_policy():
+        pytest.skip("Windows bloque l'exécutable Stan de Prophet : à exécuter dans Codespaces, WSL2 ou la CI")

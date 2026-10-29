@@ -1,0 +1,3 @@
+# Les scripts shell doivent garder des fins de ligne Unix (sinon "bad interpreter" dans Docker)
+*.sh text eol=lf
+Dockerfile* text eol=lf

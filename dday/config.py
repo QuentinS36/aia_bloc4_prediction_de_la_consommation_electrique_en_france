@@ -5,6 +5,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Un secret collé avec un espace ou un retour à la ligne final (fréquent dans Colab ou Render) casse les URL.
+for _name in ("RTE_SECRET_KEY", "DATABASE_URL", "MLFLOW_TRACKING_URI", "MLFLOW_TRACKING_USERNAME",
+              "MLFLOW_TRACKING_PASSWORD", "MODEL_NAME"):
+    _value = os.environ.get(_name)
+    if _value is not None and _value != _value.strip():
+        os.environ[_name] = _value.strip()
+
 # Régresseurs météo utilisés par Prophet (retenus lors du fine-tuning, notebooks 04 et 05)
 REGRESSORS = ["mean", "min", "max", "std", "q1", "q3"]
 HYPERPARAMS = {"changepoint_prior_scale": 0.35, "seasonality_prior_scale": 0.5}
@@ -41,6 +48,7 @@ if __name__ == "__main__":  # diagnostic : python -m dday.config  (n'affiche jam
 
     print(".env trouvé :", find_dotenv() or "AUCUN")
     for var in ("RTE_SECRET_KEY", "DATABASE_URL", "MLFLOW_TRACKING_URI", "MLFLOW_TRACKING_USERNAME",
-                "MLFLOW_TRACKING_PASSWORD", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
-                "AWS_DEFAULT_REGION", "MODEL_NAME"):
+                "MLFLOW_TRACKING_PASSWORD", "MODEL_NAME"):
         print(f"{var:28s}", "défini" if os.getenv(var) else "ABSENT ou VIDE")
+    for var in ("REPORT_S3_URI", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "ALERT_WEBHOOK_URL", "API_KEY"):
+        print(f"{var:28s}", "défini" if os.getenv(var) else "non défini (optionnel)")

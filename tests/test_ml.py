@@ -16,7 +16,7 @@ def test_split_rejects_small_data():
         train.split_last_day(synthetic_dataset(days=3), 30)
 
 
-def test_train_register_promote_and_rollback(mlflow_local):
+def test_train_register_promote_and_rollback(mlflow_local, require_stan):
     df = synthetic_dataset(days=40)
     r1 = train.train_and_register(df, window_days=30)
     assert r1["promoted"] and registry.champion_version() == r1["version"]

@@ -93,6 +93,13 @@ Test d'écriture MLflow (expérience, run, artifact, registry, alias, avec netto
 S3 (optionnel, rapports de monitoring) : `python -m dday.check --bucket NOM_DU_BUCKET`.
 Diagnostic RTE détaillé : `python -m dday.etl.extract`. Variables lues : `python -m dday.config`.
 
+### Développement dans GitHub Codespaces
+
+L'entraînement (`python -m dday.ml.train`) exécute l'exécutable Stan de Prophet. Sur un poste Windows dont la stratégie de contrôle
+d'application l'interdit (`WinError 4551`), l'entraînement et le test `test_ml.py` ne peuvent pas tourner : utiliser un Codespace.
+Le dossier `.devcontainer` installe l'environnement (Python 3.11 et dépendances). Les variables du `.env` se définissent comme
+secrets Codespaces (GitHub > Settings > Codespaces > Secrets) : aucun fichier `.env` n'est nécessaire.
+
 ## 5. Pipeline de données (ETL)
 
 1. **Extract** : consommation RTE (`short_term`, type REALISED) et température Open-Meteo par département.

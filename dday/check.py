@@ -34,12 +34,37 @@ def check_db() -> str:
     return "base joignable"
 
 
+def _explain_mlflow_error(e: Exception) -> Exception:
+    """Traduit l'erreur brute (souvent une page HTML entière) en un message exploitable."""
+    uri = os.getenv("MLFLOW_TRACKING_URI", "")
+    text = str(e)
+    if "404" in text and ("<html" in text.lower() or "<!doctype" in text.lower()):
+        return RuntimeError(
+            f"L'adresse {uri!r} répond par une page web (404) et non par un serveur MLflow. Vérifiez : "
+            "1) qu'elle se termine par .mlflow (https://dagshub.com/<utilisateur>/<depot>.mlflow), "
+            "2) l'orthographe exacte de l'utilisateur et du dépôt, 3) l'absence d'espace ou de retour à la ligne, "
+            "4) que MLFLOW_TRACKING_USERNAME/PASSWORD (jeton) donnent accès au dépôt s'il est privé.")
+    if "401" in text or "403" in text:
+        return RuntimeError(
+            "Accès refusé. Sur DagsHub, un dépôt public se lit sans authentification : une lecture réussie ne prouve donc "
+            "pas que vos identifiants sont bons. Vérifiez que MLFLOW_TRACKING_USERNAME est le nom d'utilisateur DagsHub "
+            "(ni l'e-mail ni le nom GitHub), que MLFLOW_TRACKING_PASSWORD est un jeton valide créé avec ce même compte, "
+            "et que ce compte a le droit d'écrire dans le dépôt.")
+    return e
+
+
 def check_mlflow() -> str:
     import mlflow
     from mlflow import MlflowClient
-    n_exp = len(mlflow.search_experiments())
-    n_models = len(MlflowClient().search_registered_models(max_results=5))
-    return f"{n_exp} expérience(s), {n_models} modèle(s) enregistré(s) visibles ({mlflow.get_tracking_uri()})"
+    uri = os.getenv("MLFLOW_TRACKING_URI", "")
+    if "dagshub.com" in uri and not uri.rstrip("/").endswith(".mlflow"):
+        raise RuntimeError(f"L'adresse DagsHub doit se terminer par .mlflow : {uri!r}")
+    try:
+        n_exp = len(mlflow.search_experiments())
+        n_models = len(MlflowClient().search_registered_models(max_results=5))
+    except Exception as e:  # noqa: BLE001
+        raise _explain_mlflow_error(e) from None
+    return f"{n_exp} expérience(s), {n_models} modèle(s) enregistré(s) visibles ({uri})"
 
 
 def check_mlflow_write() -> str:
@@ -51,7 +76,10 @@ def check_mlflow_write() -> str:
     c = MlflowClient()
     stamp = time.strftime("%Y%m%d-%H%M%S")
     model_name = f"dday-check-model-{stamp}"
-    exp_id = c.create_experiment(f"dday-check-{stamp}")
+    try:
+        exp_id = c.create_experiment(f"dday-check-{stamp}")
+    except Exception as e:  # noqa: BLE001
+        raise _explain_mlflow_error(e) from None
     try:
         run = c.create_run(exp_id)
         rid = run.info.run_id

@@ -1,0 +1,19 @@
+{
+  "name": "dday-mlops",
+  "image": "mcr.microsoft.com/devcontainers/python:3.11",
+  "postCreateCommand": "pip install --upgrade pip && pip install -r requirements/ml.txt -r requirements/api.txt -r requirements/test.txt -r spaces/streamlit/requirements.txt",
+  "forwardPorts": [8000, 8501],
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python"]
+    }
+  },
+  "secrets": {
+    "RTE_SECRET_KEY": { "description": "base64 de client_id:client_secret (portail RTE)" },
+    "DATABASE_URL": { "description": "Chaîne de connexion Neon (base des données)" },
+    "MLFLOW_TRACKING_URI": { "description": "https://dagshub.com/<utilisateur>/<depot>.mlflow" },
+    "MLFLOW_TRACKING_USERNAME": { "description": "Nom d'utilisateur DagsHub" },
+    "MLFLOW_TRACKING_PASSWORD": { "description": "Jeton d'accès DagsHub" },
+    "MODEL_NAME": { "description": "dday-prophet-conso" }
+  }
+}
