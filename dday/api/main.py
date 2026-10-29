@@ -11,6 +11,7 @@ import threading
 import time
 
 import pandas as pd
+import requests
 from fastapi import FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
@@ -126,10 +127,17 @@ def predict(date: dt.date | None = Query(
     except HTTPException:
         _stats["errors"] += 1
         raise
-    except Exception:
+    except requests.RequestException as e:  # prévision météo (Open-Meteo)
+        _stats["errors"] += 1
+        log.exception("Service météo indisponible")
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        raise HTTPException(502, "Service météo (Open-Meteo) indisponible" + (f" : HTTP {status}" if status else f" : {type(e).__name__}"))
+    except Exception as e:
         _stats["errors"] += 1
         log.exception("Erreur de prédiction")
-        raise HTTPException(500, "Erreur interne lors de la prédiction")
+        if type(e).__module__.startswith("mlflow"):  # registry MLflow / DagsHub
+            raise HTTPException(503, f"Registre de modèles (MLflow/DagsHub) indisponible : {type(e).__name__}")
+        raise HTTPException(500, f"Erreur interne lors de la prédiction ({type(e).__name__})")
     finally:
         _stats["latency_total"] += time.perf_counter() - t0
 

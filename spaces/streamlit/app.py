@@ -62,9 +62,15 @@ def forecast() -> dict:
             r.raise_for_status()
             return r.json()
         except requests.HTTPError as e:
+            detail = ""
+            try:
+                detail = e.response.json().get("detail", "")
+            except Exception:
+                pass
+            code = e.response.status_code if e.response is not None else "?"
+            last = RuntimeError(f"l'API répond HTTP {code}" + (f" : {detail}" if detail else ""))
             if e.response is not None and e.response.status_code < 500:
-                raise  # erreur de requête : inutile de réessayer
-            last = e
+                raise last  # erreur de requête : inutile de réessayer
         except requests.RequestException as e:
             last = e
         time.sleep(5)

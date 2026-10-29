@@ -50,3 +50,30 @@ def test_predict_without_model(monkeypatch):
 def test_reload_requires_key(client, monkeypatch):
     monkeypatch.setenv("API_KEY", "secret")
     assert client.post("/reload").status_code == 401
+
+
+def test_weather_failure_is_explained_as_502(client, monkeypatch):
+    import requests
+
+    def boom(day):
+        resp = requests.Response(); resp.status_code = 429
+        raise requests.HTTPError("429", response=resp)
+    monkeypatch.setattr(main, "_forecast_features", boom)
+    r = client.get("/predict")
+    assert r.status_code == 502 and "Open-Meteo" in r.json()["detail"] and "429" in r.json()["detail"]
+
+
+def test_registry_failure_is_explained_as_503(client, monkeypatch):
+    err = type("MlflowException", (Exception,), {"__module__": "mlflow.exceptions"})
+    monkeypatch.setattr(main, "_get_model", lambda: (_ for _ in ()).throw(err("boom")))
+    r = client.get("/predict")
+    assert r.status_code == 503 and "MLflow" in r.json()["detail"]
+
+
+def test_unknown_failure_names_the_exception_type(client, monkeypatch):
+    class BadModel:
+        def predict(self, df):
+            raise ValueError("Found NaN in column")
+    monkeypatch.setitem(main._state, "model", BadModel())
+    r = client.get("/predict")
+    assert r.status_code == 500 and "ValueError" in r.json()["detail"] and "NaN" not in r.json()["detail"]
