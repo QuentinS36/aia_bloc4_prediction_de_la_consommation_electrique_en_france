@@ -161,7 +161,7 @@ curl http://localhost:8000/predict
 - Dashboard : déploiement automatique par Render à chaque push sur `main`.
 - Secrets stockés dans GitHub Secrets.
 
-**Airflow** – DAG `dday_daily` (5 h chaque jour) : création de l'instance EC2 → ETL → monitoring Evidently → entraînement (normal ou forcé selon le monitoring) → rechargement de l'API → arrêt de l'instance (toujours exécuté, même en cas d'échec). Variables Airflow : `AMI_ID`, `SECURITY_GROUP_ID`, `KEY_NAME`, `DOCKERHUB_USER`, `API_URL`, `API_KEY` ; connexion `ec2_ssh`.
+**Airflow** – DAG `dday_daily` (5 h chaque jour) : création de l'instance EC2 → ETL → monitoring Evidently → entraînement (normal ou forcé selon le monitoring) → rechargement de l'API → prévision du lendemain (`/predict`, enregistrée pour le monitoring) → arrêt de l'instance (toujours exécuté, même en cas d'échec). Variables Airflow : `AMI_ID`, `SECURITY_GROUP_ID`, `KEY_NAME`, `DOCKERHUB_USER`, `API_URL`, `API_KEY` ; connexion `ec2_ssh`.
 
 **Evidently** – chaque jour :
 - dérive des données (température, consommation) par rapport à la référence ;

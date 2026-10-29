@@ -1,4 +1,4 @@
-"""DAG quotidien : EC2 à la demande -> ETL -> monitoring Evidently -> entraînement -> rechargement API -> arrêt EC2.
+"""DAG quotidien : EC2 à la demande -> ETL -> monitoring Evidently -> entraînement -> rechargement API -> prévision du lendemain -> arrêt EC2.
 
 Pré-requis AWS (une fois) : AMI avec Docker et le fichier /home/ec2-user/.env, rôle IAM, groupe de sécurité SSH.
 Variables Airflow : AMI_ID, SECURITY_GROUP_ID, KEY_NAME, DOCKERHUB_USER, API_URL, API_KEY.
@@ -67,6 +67,12 @@ def reload_api(**_) -> None:
     r.raise_for_status()
 
 
+def predict_tomorrow(**_) -> None:
+    """Appelle /predict (demain par défaut) : la prévision est enregistrée dans Neon et alimente le monitoring de performance."""
+    r = requests.get(Variable.get("API_URL") + "/predict", timeout=300)  # délai long : l'API peut être en veille
+    r.raise_for_status()
+
+
 def ssh(task_id: str, cmd: str, **kw) -> SSHOperator:
     return SSHOperator(task_id=task_id, ssh_conn_id="ec2_ssh", cmd_timeout=3600,
                        remote_host="{{ ti.xcom_pull(task_ids='create_ec2')['ip'] }}", command=cmd, **kw)
@@ -85,8 +91,9 @@ with DAG(
     # Réentraînement forcé (dérive ou MAPE > seuil) : fenêtre élargie + recherche d'hyperparamètres
     train_forced = ssh("train_forced", RUN.format(img=IMG_ML, cmd="python -m dday.ml.train --window-days 60 --grid"))
     reload = PythonOperator(task_id="reload_api", python_callable=reload_api, trigger_rule="none_failed_min_one_success")
+    predict = PythonOperator(task_id="predict_tomorrow", python_callable=predict_tomorrow)
     # all_done : l'instance est toujours arrêtée, même en cas d'échec (maîtrise des coûts)
     terminate = PythonOperator(task_id="terminate_ec2", python_callable=terminate_ec2, trigger_rule="all_done")
 
-    create >> etl >> monitoring >> branch >> [train_daily, train_forced] >> reload >> terminate
-    [etl, monitoring, train_daily, train_forced, reload] >> terminate
+    create >> etl >> monitoring >> branch >> [train_daily, train_forced] >> reload >> predict >> terminate
+    [etl, monitoring, train_daily, train_forced, reload, predict] >> terminate
