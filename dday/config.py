@@ -22,7 +22,10 @@ CHAMPION_ALIAS = "champion"
 # Seuils de monitoring (cf. cahier des charges)
 MAPE_TARGET = float(os.getenv("MAPE_TARGET", "0.03"))      # objectif métier : 3 %
 MAPE_ALERT = float(os.getenv("MAPE_ALERT", "0.04"))        # alerte + réentraînement forcé : 4 %
-DRIFT_SHARE_ALERT = float(os.getenv("DRIFT_SHARE_ALERT", "0.5"))  # part de colonnes en dérive
+DRIFT_SHARE_ALERT = float(os.getenv("DRIFT_SHARE_ALERT", "0.5"))  # part de colonnes en dérive : avertissement seulement
+# Une dérive des données d'entrée est surveillée mais ne force pas le réentraînement (le modèle est déjà réentraîné
+# chaque jour). Mettre ALERT_ON_DRIFT=true pour aussi la notifier par webhook.
+ALERT_ON_DRIFT = os.getenv("ALERT_ON_DRIFT", "false").strip().lower() in ("1", "true", "yes")
 
 
 def to_sqlalchemy_url(url: str) -> str:

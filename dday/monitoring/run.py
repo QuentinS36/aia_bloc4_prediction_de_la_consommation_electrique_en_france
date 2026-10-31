@@ -2,6 +2,7 @@
 
 Usage : python -m dday.monitoring.run
 La dernière ligne affichée est RETRAIN_NEEDED=true|false (lue par Airflow).
+Réentraînement forcé : MAPE réel > seuil. Dérive des données : avertissement (journal, résumé, webhook si ALERT_ON_DRIFT).
 """
 from __future__ import annotations
 
@@ -74,12 +75,30 @@ def alert(message: str) -> None:
 
 
 def decide(drift_share: float | None, mape: float | None) -> tuple[bool, list[str]]:
+    """Réentraînement forcé uniquement si la performance réelle se dégrade (MAPE au-dessus du seuil).
+
+    La dérive des données d'entrée ne suffit pas : le modèle est réentraîné chaque jour sur 30 jours glissants et suit
+    donc les changements saisonniers. Elle est signalée par watch(), sans forcer de réentraînement.
+    """
     reasons = []
-    if drift_share is not None and drift_share >= config.DRIFT_SHARE_ALERT:
-        reasons.append(f"dérive des données : {drift_share:.0%} des colonnes (seuil {config.DRIFT_SHARE_ALERT:.0%})")
     if mape is not None and mape > config.MAPE_ALERT:
         reasons.append(f"MAPE réel {mape:.2%} > seuil {config.MAPE_ALERT:.0%}")
     return bool(reasons), reasons
+
+
+def drift_detected(drift_share: float | None) -> bool:
+    return drift_share is not None and drift_share >= config.DRIFT_SHARE_ALERT
+
+
+def watch(drift_share: float | None, mape: float | None) -> list[str]:
+    """Avertissements qui ne déclenchent pas de réentraînement forcé."""
+    warnings = []
+    if drift_detected(drift_share):
+        warnings.append(f"dérive des données : {drift_share:.0%} des colonnes (seuil {config.DRIFT_SHARE_ALERT:.0%}) ; "
+                        "souvent saisonnière, le modèle est réentraîné chaque jour")
+    if mape is None:
+        warnings.append("performance non évaluée : aucune prévision comparable aux valeurs réelles")
+    return warnings
 
 
 def run(engine=None, out_root: str = "monitoring_reports", now: pd.Timestamp | None = None) -> dict:
@@ -108,12 +127,18 @@ def run(engine=None, out_root: str = "monitoring_reports", now: pd.Timestamp | N
         log.warning("Aucune prévision comparable aux données réelles : performance non évaluée")
 
     retrain, reasons = decide(drift_share, mape)
+    warnings = watch(drift_share, mape)
     summary = {"date": f"{now:%Y-%m-%d}", "drift_share": drift_share, "mape": mape,
-               "retrain_needed": retrain, "reasons": reasons}
-    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+               "drift_detected": drift_detected(drift_share), "retrain_needed": retrain,
+               "reasons": reasons, "warnings": warnings}
+    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False))
     publish(out_dir)
+    for w in warnings:
+        log.warning(w)
     if retrain:
-        alert("Monitoring DDay : " + " ; ".join(reasons))
+        alert("Monitoring DDay : réentraînement forcé : " + " ; ".join(reasons))
+    elif summary["drift_detected"] and config.ALERT_ON_DRIFT:
+        alert("Monitoring DDay : " + warnings[0])
     log.info("Monitoring : %s", summary)
     return summary
 
@@ -121,4 +146,5 @@ def run(engine=None, out_root: str = "monitoring_reports", now: pd.Timestamp | N
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     res = run()
+    print(f"DRIFT_DETECTED={'true' if res['drift_detected'] else 'false'}")
     print(f"RETRAIN_NEEDED={'true' if res['retrain_needed'] else 'false'}")

@@ -1,12 +1,13 @@
 """DAG quotidien : EC2 à la demande -> ETL -> monitoring Evidently -> entraînement -> rechargement API -> prévision du lendemain -> arrêt EC2.
 
 Pré-requis AWS (une fois) : AMI avec Docker et le fichier /home/ec2-user/.env, rôle IAM, groupe de sécurité SSH.
-Variables Airflow : AMI_ID, SECURITY_GROUP_ID, KEY_NAME, DOCKERHUB_USER, API_URL, API_KEY.
+Variables Airflow : AMI_ID, SECURITY_GROUP_ID, KEY_NAME, DOCKERHUB_USER, API_URL, API_KEY (optionnelle : EC2_INSTANCE_TYPE, t3.large par défaut).
 Connexion Airflow : ec2_ssh (utilisateur ec2-user + clé privée).
 """
 from __future__ import annotations
 
 import base64
+import logging
 import socket
 import time
 from datetime import datetime, timedelta
@@ -18,29 +19,53 @@ from airflow.models import Variable
 from airflow.operators.python import BranchPythonOperator, PythonOperator
 from airflow.providers.ssh.operators.ssh import SSHOperator
 
+log = logging.getLogger(__name__)
+
+EC2_NAME_TAG = "dday-batch"
 IMG_ETL = "{{ var.value.DOCKERHUB_USER }}/dday-etl:latest"
 IMG_ML = "{{ var.value.DOCKERHUB_USER }}/dday-ml:latest"
 RUN = "docker pull {img} && docker run --rm --env-file /home/ec2-user/.env {img} {cmd}"
 
 
+def _terminate_orphans(ec2) -> list[str]:
+    """Arrête les instances dday-batch oubliées par une exécution précédente interrompue (protection contre les coûts)."""
+    reservations = ec2.describe_instances(Filters=[
+        {"Name": "tag:Name", "Values": [EC2_NAME_TAG]},
+        {"Name": "instance-state-name", "Values": ["pending", "running", "stopping", "stopped"]},
+    ])["Reservations"]
+    ids = [i["InstanceId"] for r in reservations for i in r["Instances"]]
+    if ids:
+        log.warning("Instances orphelines arrêtées : %s", ids)
+        ec2.terminate_instances(InstanceIds=ids)
+    return ids
+
+
 def create_ec2(**_) -> dict:
     ec2 = boto3.client("ec2")
+    _terminate_orphans(ec2)
     inst = ec2.run_instances(
-        ImageId=Variable.get("AMI_ID"), InstanceType="t3.large", MinCount=1, MaxCount=1,
+        ImageId=Variable.get("AMI_ID"), InstanceType=Variable.get("EC2_INSTANCE_TYPE", "t3.large"),
+        MinCount=1, MaxCount=1,
         KeyName=Variable.get("KEY_NAME"), SecurityGroupIds=[Variable.get("SECURITY_GROUP_ID")],
-        TagSpecifications=[{"ResourceType": "instance", "Tags": [{"Key": "Name", "Value": "dday-batch"}]}],
+        TagSpecifications=[{"ResourceType": "instance", "Tags": [{"Key": "Name", "Value": EC2_NAME_TAG}]}],
     )["Instances"][0]
     iid = inst["InstanceId"]
-    ec2.get_waiter("instance_running").wait(InstanceIds=[iid])
-    ip = ec2.describe_instances(InstanceIds=[iid])["Reservations"][0]["Instances"][0]["PublicIpAddress"]
-    for _ in range(30):  # attend que SSH réponde
-        try:
-            socket.create_connection((ip, 22), timeout=5).close()
-            break
-        except OSError:
-            time.sleep(10)
-    else:
-        raise TimeoutError("SSH injoignable")
+    try:
+        ec2.get_waiter("instance_running").wait(InstanceIds=[iid])
+        ip = ec2.describe_instances(InstanceIds=[iid])["Reservations"][0]["Instances"][0]["PublicIpAddress"]
+        for _ in range(30):  # attend que SSH réponde
+            try:
+                socket.create_connection((ip, 22), timeout=5).close()
+                break
+            except OSError:
+                time.sleep(10)
+        else:
+            raise TimeoutError("SSH injoignable")
+    except BaseException:
+        # Si on échoue avant de renvoyer l'identifiant, terminate_ec2 ne le connaîtrait pas : on arrête l'instance ici.
+        log.error("Échec de la préparation de l'instance %s : arrêt immédiat", iid)
+        ec2.terminate_instances(InstanceIds=[iid])
+        raise
     return {"instance_id": iid, "ip": ip}
 
 
@@ -80,6 +105,7 @@ def ssh(task_id: str, cmd: str, **kw) -> SSHOperator:
 
 with DAG(
     "dday_daily", start_date=datetime(2026, 1, 1), schedule="0 5 * * *", catchup=False, max_active_runs=1,
+    dagrun_timeout=timedelta(hours=3),
     default_args={"retries": 2, "retry_delay": timedelta(minutes=5)},
     tags=["dday", "mlops"],
 ) as dag:
@@ -88,7 +114,7 @@ with DAG(
     monitoring = ssh("monitoring", RUN.format(img=IMG_ML, cmd="python -m dday.monitoring.run"), do_xcom_push=True)
     branch = BranchPythonOperator(task_id="choose_training", python_callable=choose_training)
     train_daily = ssh("train_daily", RUN.format(img=IMG_ML, cmd="python -m dday.ml.train"))
-    # Réentraînement forcé (dérive ou MAPE > seuil) : fenêtre élargie + recherche d'hyperparamètres
+    # Réentraînement forcé (MAPE réel > seuil) : fenêtre élargie + recherche d'hyperparamètres
     train_forced = ssh("train_forced", RUN.format(img=IMG_ML, cmd="python -m dday.ml.train --window-days 60 --grid"))
     reload = PythonOperator(task_id="reload_api", python_callable=reload_api, trigger_rule="none_failed_min_one_success")
     predict = PythonOperator(task_id="predict_tomorrow", python_callable=predict_tomorrow)

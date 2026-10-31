@@ -12,7 +12,7 @@ Le projet automatise tout le cycle de vie du modèle : collecte, entraînement, 
 |---|---|
 | Qualité de prévision | MAPE < 3 % (2,71 % en simulation sur 100 jours) |
 | Fraîcheur des données | Mise à jour quotidienne |
-| Réentraînement | Quotidien, 30 jours glissants, et forcé si dérive |
+| Réentraînement | Quotidien, 30 jours glissants, et forcé si la performance se dégrade (MAPE > 4 %) |
 | Disponibilité | API REST documentée (OpenAPI) |
 | Traçabilité | Runs, modèles et rapports versionnés, rollback possible |
 | Accessibilité | Dashboard conforme aux bonnes pratiques RGAA/WCAG (voir §9) |
@@ -62,7 +62,7 @@ RTE Eco2mix + Open-Meteo
 │   ├── ml/                  # train.py (Prophet + MLflow), registry.py (promotion, rollback)
 │   ├── api/main.py          # API FastAPI
 │   └── monitoring/run.py    # Rapports Evidently, décision de réentraînement, alerte
-├── airflow/dags/dday_daily.py   # DAG quotidien
+├── airflow/                 # DAG quotidien (dags/) et lancement local (env.sh, start_standalone.sh, docker-compose.yml)
 ├── docker/                  # Dockerfile.etl, Dockerfile.ml, Dockerfile.api
 ├── requirements/            # Dépendances par service (+ test.txt)
 ├── tests/                   # Tests pytest (ETL, ML, API, monitoring)
@@ -118,7 +118,7 @@ docker run --rm --env-file .env dday-etl
 - Chaque run est tracé dans MLflow : hyperparamètres, MAPE/MAE, artefacts.
 - Le modèle est enregistré dans le **Model Registry** ; l'alias `champion` désigne la version servie.
 - Un modèle n'est promu que si son MAPE, mesuré sur la même journée de test, est inférieur ou égal à celui du champion actuel. Le modèle enregistré est ensuite réentraîné sur la fenêtre complète (jour de test inclus).
-- Réentraînement forcé (alerte monitoring) : fenêtre de 60 jours et recherche d'hyperparamètres (`--window-days 60 --grid`).
+- Réentraînement forcé (MAPE réel au-dessus du seuil) : fenêtre de 60 jours et recherche d'hyperparamètres (`--window-days 60 --grid`).
 - **Rollback** : repointer l'alias `champion` vers la version précédente, puis recharger l'API (`POST /reload`).
 
 ```bash
@@ -163,11 +163,33 @@ curl http://localhost:8000/predict
 
 **Airflow** – DAG `dday_daily` (5 h chaque jour) : création de l'instance EC2 → ETL → monitoring Evidently → entraînement (normal ou forcé selon le monitoring) → rechargement de l'API → prévision du lendemain (`/predict`, enregistrée pour le monitoring) → arrêt de l'instance (toujours exécuté, même en cas d'échec). Variables Airflow : `AMI_ID`, `SECURITY_GROUP_ID`, `KEY_NAME`, `DOCKERHUB_USER`, `API_URL`, `API_KEY` ; connexion `ec2_ssh`.
 
+Lancement local (Linux, WSL2, Codespaces) :
+
+```bash
+cp airflow/.env.example airflow/.env     # puis remplir (AWS, AMI, clé SSH, API)
+bash airflow/start_standalone.sh         # installe Airflow 2.10 dans .venv-airflow puis lance l'interface sur :8080
+```
+
+Avec Docker : copier la clé SSH dans `airflow/keys/ec2.pem`, puis `docker compose -f airflow/docker-compose.yml up -d` (voir la procédure détaillée). Les variables du DAG et la connexion `ec2_ssh` sont fournies par `airflow/.env`
+(variables d'environnement `AIRFLOW_VAR_*` et `AIRFLOW_CONN_*`) : rien à créer à la main dans l'interface.
+
+Vérifier toute la configuration (AWS, AMI, groupe de sécurité, clé SSH, images Docker Hub, API) sans lancer d'instance :
+`docker compose -f airflow/docker-compose.yml exec airflow python /opt/airflow/check_config.py`, ou `source airflow/env.sh && python airflow/check_config.py`.
+
+Tester une tâche seule, sans lancer d'instance EC2 : `source airflow/env.sh && airflow tasks test dday_daily predict_tomorrow 2026-01-01`.
+Le DAG est créé en pause. Un déclenchement manuel pendant la pause reste « en attente » ; l'activation lance aussitôt une exécution pour le dernier créneau de 5 h manqué (`catchup=False`) : ne pas cumuler déclenchement manuel et activation, sous peine de deux exécutions (donc deux instances EC2) à la suite.
+
+Garde-fous contre les coûts : `create_ec2` arrête toute instance `dday-batch` oubliée par une exécution précédente et arrête celle qu'elle vient de lancer
+si la préparation échoue ; `terminate_ec2` s'exécute même en cas d'échec ; `airflow/aws_iam_policy.json` limite les droits de l'utilisateur AWS.
+Les tests du DAG (`tests/test_dag.py`, EC2 simulé par moto) tournent dans le workflow `dag.yml`.
+
 **Evidently** – chaque jour :
 - dérive des données (température, consommation) par rapport à la référence ;
 - performance réelle (MAPE sur la veille) ;
 - rapport HTML enregistré dans `monitoring_reports/` (et sur S3 si `REPORT_S3_URI` est défini) ;
-- seuil d'alerte : MAPE > 4 % ou dérive détectée → notification et réentraînement forcé.
+- **réentraînement forcé** si le MAPE réel dépasse 4 % (notification par webhook) ;
+- **dérive détectée** (≥ 50 % des colonnes) : avertissement dans le journal et le résumé `summary.json`, sans réentraînement forcé : le modèle est déjà réentraîné chaque jour, et une dérive saisonnière (automne, printemps) déclencherait sinon une alerte quotidienne. `ALERT_ON_DRIFT=true` envoie aussi cet avertissement par webhook ;
+- performance non évaluée tant qu'aucune prévision n'a de valeur réelle correspondante (simple avertissement).
 
 ## 9. Accessibilité
 

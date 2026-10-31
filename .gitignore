@@ -213,3 +213,11 @@ __marimo__/
 monitoring_reports/
 mlflow.db
 mlruns/
+
+# Airflow
+.airflow/
+.venv-airflow/
+airflow/.env
+*.pem
+airflow/keys/*
+!airflow/keys/.gitkeep

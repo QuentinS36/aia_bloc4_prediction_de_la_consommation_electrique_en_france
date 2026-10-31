@@ -1,0 +1,36 @@
+# Lancement d'Airflow avec Docker : docker compose -f airflow/docker-compose.yml up -d
+# Configuration : copier .env.example en .env dans ce dossier (airflow/) ; copier la clé SSH dans airflow/keys/ec2.pem.
+# Image officielle d'Airflow (fournisseurs SSH et Amazon inclus). Mode "standalone" : pour le développement et la démonstration.
+services:
+  airflow:
+    image: apache/airflow:2.10.5-python3.11
+    command: standalone
+    ports:
+      - "8080:8080"
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-eu-west-3}
+      AIRFLOW_VAR_AMI_ID: ${AMI_ID:-}
+      AIRFLOW_VAR_SECURITY_GROUP_ID: ${SECURITY_GROUP_ID:-}
+      AIRFLOW_VAR_KEY_NAME: ${KEY_NAME:-}
+      AIRFLOW_VAR_DOCKERHUB_USER: ${DOCKERHUB_USER:-}
+      AIRFLOW_VAR_API_URL: ${API_URL:-}
+      AIRFLOW_VAR_API_KEY: ${API_KEY:-}
+      AIRFLOW_VAR_EC2_INSTANCE_TYPE: ${EC2_INSTANCE_TYPE:-t3.large}
+      AIRFLOW_CONN_EC2_SSH: '{"conn_type": "ssh", "login": "${EC2_SSH_USER:-ec2-user}", "extra": {"key_file": "/opt/airflow/keys/ec2.pem", "no_host_key_check": true}}'
+    volumes:
+      - ./dags:/opt/airflow/dags:ro
+      - ./keys:/opt/airflow/keys:ro
+      - ./check_config.py:/opt/airflow/check_config.py:ro
+      - airflow-home:/opt/airflow
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+volumes:
+  airflow-home:
