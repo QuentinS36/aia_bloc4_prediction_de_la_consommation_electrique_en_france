@@ -28,7 +28,7 @@ RUN = "docker pull {img} && docker run --rm --env-file /home/ec2-user/.env {img}
 
 
 def _terminate_orphans(ec2) -> list[str]:
-    """Arrête les instances dday-batch oubliées par une exécution précédente interrompue (protection contre les coûts)."""
+    """Résilie les instances dday-batch oubliées par une exécution précédente interrompue (prévention des instances laissées actives en cas d'échec)."""
     reservations = ec2.describe_instances(Filters=[
         {"Name": "tag:Name", "Values": [EC2_NAME_TAG]},
         {"Name": "instance-state-name", "Values": ["pending", "running", "stopping", "stopped"]},
@@ -53,7 +53,7 @@ def create_ec2(**_) -> dict:
     try:
         ec2.get_waiter("instance_running").wait(InstanceIds=[iid])
         ip = ec2.describe_instances(InstanceIds=[iid])["Reservations"][0]["Instances"][0]["PublicIpAddress"]
-        for _ in range(30):  # attend que SSH réponde
+        for _ in range(30):  # attente que SSH réponde
             try:
                 socket.create_connection((ip, 22), timeout=5).close()
                 break
@@ -62,7 +62,7 @@ def create_ec2(**_) -> dict:
         else:
             raise TimeoutError("SSH injoignable")
     except BaseException:
-        # Si on échoue avant de renvoyer l'identifiant, terminate_ec2 ne le connaîtrait pas : on arrête l'instance ici.
+        # Si on échoue avant de renvoyer l'identifiant, terminate_ec2 ne le connaîtrait pas : on résilie l'instance ici.
         log.error("Échec de la préparation de l'instance %s : arrêt immédiat", iid)
         ec2.terminate_instances(InstanceIds=[iid])
         raise
@@ -76,7 +76,7 @@ def terminate_ec2(ti, **_) -> None:
 
 
 def _decode(out) -> str:
-    try:  # selon la version du provider SSH, la sortie est encodée en base64
+    try:  
         return base64.b64decode(out).decode()
     except Exception:
         return str(out)
@@ -94,7 +94,7 @@ def reload_api(**_) -> None:
 
 def predict_tomorrow(**_) -> None:
     """Appelle /predict (demain par défaut) : la prévision est enregistrée dans Neon et alimente le monitoring de performance."""
-    r = requests.get(Variable.get("API_URL") + "/predict", timeout=300)  # délai long : l'API peut être en veille
+    r = requests.get(Variable.get("API_URL") + "/predict", timeout=300)  # délai long : l'API peut être en veille (free tier render.com)
     r.raise_for_status()
 
 
