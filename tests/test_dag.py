@@ -124,3 +124,49 @@ def test_orphans_from_a_previous_run_are_terminated(dagmod, monkeypatch):
     assert sorted(_states(ec2)) == ["running", "running", "terminated"]
     # l'instance d'un autre projet n'est jamais touchée
     assert ec2.describe_instances(InstanceIds=[other["Instances"][0]["InstanceId"]])["Reservations"][0]["Instances"][0]["State"]["Name"] == "running"
+
+
+# ---- Connexion SSH : régression « Missing required param: remote_host » ----
+import json  # noqa: E402
+import re  # noqa: E402
+import subprocess  # noqa: E402
+
+import yaml  # noqa: E402
+
+AIRFLOW_DIR = Path(__file__).resolve().parents[1] / "airflow"
+SSH_TASKS = ("etl", "monitoring", "train_daily", "train_forced")
+
+
+def _conn_from_env_sh(tmp_path):
+    """JSON de connexion produit réellement par airflow/env.sh (exécuté dans bash)."""
+    (tmp_path / "airflow").mkdir()
+    (tmp_path / "airflow" / "env.sh").write_text((AIRFLOW_DIR / "env.sh").read_text(encoding="utf-8"), encoding="utf-8")
+    (tmp_path / "airflow" / ".env").write_text("EC2_SSH_KEY_FILE=/tmp/ec2.pem\n", encoding="utf-8")
+    out = subprocess.run(["bash", "-c", 'source "$1"; printf %s "$AIRFLOW_CONN_EC2_SSH"', "_", str(tmp_path / "airflow" / "env.sh")],
+                         capture_output=True, text=True, check=True)
+    return out.stdout
+
+
+def _conn_from_compose():
+    raw = yaml.safe_load((AIRFLOW_DIR / "docker-compose.yml").read_text(encoding="utf-8"))["services"]["airflow"]["environment"]["AIRFLOW_CONN_EC2_SSH"]
+    return re.sub(r"\$\{EC2_SSH_USER:-([^}]*)\}", r"\1", raw)
+
+
+@pytest.mark.parametrize("source", ["env.sh", "docker-compose"])
+@pytest.mark.parametrize("task_id", SSH_TASKS)
+def test_ssh_tasks_can_open_their_connection(dagmod, monkeypatch, tmp_path, source, task_id):
+    conn = _conn_from_env_sh(tmp_path) if source == "env.sh" else _conn_from_compose()
+    json.loads(conn)  # JSON valide
+    monkeypatch.setenv("AIRFLOW_CONN_EC2_SSH", conn)
+    op = dagmod.dag.get_task(task_id)
+    op.remote_host = "13.48.1.2"          # valeur obtenue après rendu du modèle Jinja
+    op.__dict__.pop("ssh_hook", None)     # vide le cache de la propriété
+    hook = op.ssh_hook                    # lève « Missing required param: remote_host » si la connexion n'a pas de host
+    assert hook.remote_host == "13.48.1.2" and hook.username == "ec2-user"
+
+
+def test_templates_render_with_the_instance_address_and_image(dagmod):
+    op = dagmod.dag.get_task("etl")
+    context = {"ti": FakeTI({"ip": "13.48.1.2", "instance_id": "i-1"}), "var": {"value": {"DOCKERHUB_USER": "moi"}}}
+    assert op.render_template(op.remote_host, context) == "13.48.1.2"
+    assert "moi/dday-etl:latest" in op.render_template(op.command, context)

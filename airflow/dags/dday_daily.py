@@ -44,7 +44,7 @@ def create_ec2(**_) -> dict:
     ec2 = boto3.client("ec2")
     _terminate_orphans(ec2)
     inst = ec2.run_instances(
-        ImageId=Variable.get("AMI_ID"), InstanceType=Variable.get("EC2_INSTANCE_TYPE", "t3.large"),
+        ImageId=Variable.get("AMI_ID"), InstanceType=Variable.get("EC2_INSTANCE_TYPE", "t3.small"),
         MinCount=1, MaxCount=1,
         KeyName=Variable.get("KEY_NAME"), SecurityGroupIds=[Variable.get("SECURITY_GROUP_ID")],
         TagSpecifications=[{"ResourceType": "instance", "Tags": [{"Key": "Name", "Value": EC2_NAME_TAG}]}],

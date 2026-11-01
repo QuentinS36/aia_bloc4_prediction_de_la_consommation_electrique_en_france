@@ -19,8 +19,8 @@ services:
       AIRFLOW_VAR_DOCKERHUB_USER: ${DOCKERHUB_USER:-}
       AIRFLOW_VAR_API_URL: ${API_URL:-}
       AIRFLOW_VAR_API_KEY: ${API_KEY:-}
-      AIRFLOW_VAR_EC2_INSTANCE_TYPE: ${EC2_INSTANCE_TYPE:-t3.large}
-      AIRFLOW_CONN_EC2_SSH: '{"conn_type": "ssh", "login": "${EC2_SSH_USER:-ec2-user}", "extra": {"key_file": "/opt/airflow/keys/ec2.pem", "no_host_key_check": true}}'
+      AIRFLOW_VAR_EC2_INSTANCE_TYPE: ${EC2_INSTANCE_TYPE:-t3.small}
+      AIRFLOW_CONN_EC2_SSH: '{"conn_type": "ssh", "host": "placeholder.invalid", "login": "${EC2_SSH_USER:-ec2-user}", "extra": {"key_file": "/opt/airflow/keys/ec2.pem", "no_host_key_check": true}}'
     volumes:
       - ./dags:/opt/airflow/dags:ro
       - ./keys:/opt/airflow/keys:ro

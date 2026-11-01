@@ -79,6 +79,21 @@ def check_key_pair() -> str:
     return f"paire de clés « {kp['KeyName']} » trouvée"
 
 
+def check_run_dry_run() -> str:
+    """Simule le lancement du DAG (DryRun) : vérifie le droit de lancer des instances (et d'y poser l'étiquette) sans rien créer ni facturer."""
+    from botocore.exceptions import ClientError
+    try:
+        _ec2().run_instances(
+            ImageId=var("AMI_ID"), InstanceType=var("EC2_INSTANCE_TYPE") or "t3.large", MinCount=1, MaxCount=1,
+            KeyName=var("KEY_NAME"), SecurityGroupIds=[var("SECURITY_GROUP_ID")], DryRun=True,
+            TagSpecifications=[{"ResourceType": "instance", "Tags": [{"Key": "Name", "Value": "dday-batch"}]}])
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "DryRunOperation":
+            return "droit de lancer des instances accordé (simulation DryRun : aucune instance créée)"
+        raise
+    raise RuntimeError("réponse inattendue : la simulation aurait dû répondre DryRunOperation")
+
+
 def check_ssh_key_file() -> str:
     path = CONTAINER_KEY if CONTAINER_KEY.exists() else Path(os.getenv("EC2_SSH_KEY_FILE", ""))
     if not path or not path.is_file():
@@ -109,10 +124,31 @@ def check_orphans() -> str:
     return "aucune instance dday-batch en cours"
 
 
+def explain(e: Exception) -> str:
+    """Message d'erreur complet (les erreurs AWS indiquent d'où vient un refus) avec un conseil si la cause est connue."""
+    text = str(e)
+    try:
+        from botocore.exceptions import ClientError
+        if isinstance(e, ClientError):
+            text = e.response.get("Error", {}).get("Message", text)
+    except ImportError:
+        pass
+    hint = ""
+    if "explicit deny" in text:
+        hint = (" || CONSEIL : un refus explicite vient d'une règle « Deny » (politique de l'utilisateur ou de l'un de ses groupes, "
+                "limite de permissions, ou règle d'organisation, souvent une restriction de région). La fin du message ci-dessus "
+                "dit laquelle ; vérifier aussi AWS_DEFAULT_REGION.")
+    elif "no identity-based policy allows" in text:
+        hint = " || CONSEIL : attacher à l'utilisateur la politique de airflow/aws_iam_policy.json."
+    elif "NotFound" in text or "does not exist" in text:
+        hint = " || CONSEIL : vérifier AWS_DEFAULT_REGION : ces ressources n'existent que dans leur région."
+    return f"{type(e).__name__} : {text[:900]}{hint}"
+
+
 CHECKS = [
     ("Variables", check_variables), ("API", check_api), ("Identité AWS", check_credentials), ("Région", check_region),
     ("Image (AMI)", check_ami), ("Groupe de sécurité", check_security_group), ("Paire de clés", check_key_pair),
-    ("Clé SSH locale", check_ssh_key_file), ("Images Docker Hub", check_dockerhub_images), ("Instances en cours", check_orphans),
+    ("Lancement (simulation)", check_run_dry_run), ("Clé SSH locale", check_ssh_key_file), ("Images Docker Hub", check_dockerhub_images), ("Instances en cours", check_orphans),
 ]
 
 
@@ -120,10 +156,10 @@ def main() -> int:
     ok_all = True
     for label, fn in CHECKS:
         try:
-            print(f"{label:20s} OK      {fn()}")
+            print(f"{label:23s} OK      {fn()}")
         except Exception as e:  # noqa: BLE001
             ok_all = False
-            print(f"{label:20s} ÉCHEC   {type(e).__name__} : {str(e)[:260]}")
+            print(f"{label:23s} ÉCHEC   {explain(e)}")
     return 0 if ok_all else 1
 
 

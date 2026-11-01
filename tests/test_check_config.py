@@ -87,3 +87,51 @@ def test_private_or_missing_dockerhub_image_is_explained(cc, monkeypatch, tmp_pa
     monkeypatch.setattr(cc.requests, "get", lambda url, **k: Resp(404))
     with pytest.raises(RuntimeError, match="introuvable"):
         cc.check_dockerhub_images()
+
+
+def test_aws_denial_is_shown_in_full_with_a_hint(cc):
+    from botocore.exceptions import ClientError
+    msg = ("You are not authorized to perform this operation. User: arn:aws:iam::123:user/x is not authorized to perform: "
+           "ec2:DescribeImages with an explicit deny in a service control policy")
+    out = cc.explain(ClientError({"Error": {"Code": "UnauthorizedOperation", "Message": msg}}, "DescribeImages"))
+    assert "service control policy" in out and "CONSEIL" in out and "AWS_DEFAULT_REGION" in out
+
+
+def test_missing_resource_hints_at_the_region(cc):
+    from botocore.exceptions import ClientError
+    out = cc.explain(ClientError({"Error": {"Code": "InvalidAMIID.NotFound", "Message": "The image id does not exist"}}, "DescribeImages"))
+    assert "région" in out
+
+
+@mock_aws
+def test_dry_run_launch_creates_no_instance(cc, monkeypatch, tmp_path):
+    _env(monkeypatch, tmp_path)
+    ec2 = boto3.client("ec2")
+    assert "aucune instance créée" in cc.check_run_dry_run()
+    assert ec2.describe_instances()["Reservations"] == []
+
+
+def test_dry_run_denial_is_propagated(cc, monkeypatch):
+    """Un refus d'AWS pendant la simulation (droit manquant) doit remonter, pas être pris pour un succès."""
+    from botocore.exceptions import ClientError
+
+    class Denied:
+        def run_instances(self, **k):
+            raise ClientError({"Error": {"Code": "UnauthorizedOperation", "Message": "not authorized to perform: ec2:RunInstances"}},
+                              "RunInstances")
+    for k in ("AMI_ID", "KEY_NAME", "SECURITY_GROUP_ID"):
+        monkeypatch.setenv(f"AIRFLOW_VAR_{k}", "x")
+    monkeypatch.setattr(cc, "_ec2", lambda: Denied())
+    with pytest.raises(ClientError, match="RunInstances"):
+        cc.check_run_dry_run()
+
+
+def test_dry_run_unexpected_success_is_an_error(cc, monkeypatch):
+    class Unexpected:
+        def run_instances(self, **k):
+            return {"Instances": []}
+    for k in ("AMI_ID", "KEY_NAME", "SECURITY_GROUP_ID"):
+        monkeypatch.setenv(f"AIRFLOW_VAR_{k}", "x")
+    monkeypatch.setattr(cc, "_ec2", lambda: Unexpected())
+    with pytest.raises(RuntimeError, match="DryRunOperation"):
+        cc.check_run_dry_run()

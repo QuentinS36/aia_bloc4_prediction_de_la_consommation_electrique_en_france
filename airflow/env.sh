@@ -22,9 +22,10 @@ for _v in AMI_ID SECURITY_GROUP_ID KEY_NAME DOCKERHUB_USER API_URL API_KEY EC2_I
   if [ -n "${!_v:-}" ]; then export "AIRFLOW_VAR_${_v}=${!_v}"; fi
 done
 
-# Connexion SSH vers les instances (l'hôte change à chaque exécution : pas de vérification de clé d'hôte)
+# Connexion SSH vers les instances. L'hôte change à chaque exécution : « placeholder.invalid » n'est qu'un remplaçant exigé par le
+# fournisseur SSH, remplacé par l'adresse réelle de l'instance (remote_host du DAG). Pas de vérification de clé d'hôte.
 if [ -n "${EC2_SSH_KEY_FILE:-}" ]; then
-  export AIRFLOW_CONN_EC2_SSH="{\"conn_type\": \"ssh\", \"login\": \"${EC2_SSH_USER:-ec2-user}\", \"extra\": {\"key_file\": \"${EC2_SSH_KEY_FILE}\", \"no_host_key_check\": true}}"
+  export AIRFLOW_CONN_EC2_SSH="{\"conn_type\": \"ssh\", \"host\": \"placeholder.invalid\", \"login\": \"${EC2_SSH_USER:-ec2-user}\", \"extra\": {\"key_file\": \"${EC2_SSH_KEY_FILE}\", \"no_host_key_check\": true}}"
 else
   echo "Attention : EC2_SSH_KEY_FILE n'est pas défini, la connexion ec2_ssh n'est pas créée." >&2
 fi
